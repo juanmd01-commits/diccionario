@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Diccionario">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#0f766e">
+<title>Mi diccionario</title>
+<style>
+:root{--bg:#f2f2f7;--card:#fff;--tx:#111;--mu:#6b7280;--ac:#0f766e;--bd:#e5e7eb}
+@media(prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--tx:#f2f2f7;--mu:#9ca3af;--ac:#2dd4bf;--bd:#2c2c2e}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--tx);font:17px/1.4 -apple-system,system-ui,sans-serif;
+  padding-bottom:calc(70px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:calc(10px + env(safe-area-inset-top)) 12px 8px;border-bottom:1px solid var(--bd)}
+header form{display:flex;gap:8px}
+input,textarea{width:100%;font:inherit;font-size:17px;padding:10px 12px;border:1px solid var(--bd);border-radius:10px;background:var(--card);color:var(--tx)}
+button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--card);color:var(--ac);border:1px solid var(--bd)}
+button.primary{background:var(--ac);color:#fff;border-color:var(--ac)}
+button.del{color:#dc2626}
+main{padding:12px;max-width:720px;margin:0 auto}
+.hint{color:var(--mu);font-size:14px;margin:4px 2px 10px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px 14px;margin-bottom:10px}
+.ar{font-size:28px;line-height:1.5;text-align:right}
+.tr{color:var(--mu);font-style:italic}
+.es{font-size:18px}
+.note{color:var(--mu);font-size:15px;margin-top:4px;white-space:pre-wrap}
+.act{display:flex;gap:8px;margin-top:8px;justify-content:flex-end}
+.act button{padding:6px 12px}
+.ext{display:block;text-align:center;padding:12px;margin:12px 0;border-radius:12px;background:var(--card);border:1px solid var(--bd);color:var(--ac);text-decoration:none}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--bd);
+  padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;border:0;border-radius:0;background:none;color:var(--mu);font-size:13px;padding:8px 0}
+nav button.on{color:var(--ac)}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:20;display:flex;align-items:flex-end}
+.sheet{background:var(--bg);width:100%;max-height:92vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px;
+  padding-bottom:calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}
+.sheet h2{margin:0 0 4px;font-size:20px}
+.row{display:flex;gap:8px;justify-content:flex-end}
+h3{margin:18px 2px 6px;font-size:16px}
+.hist{display:block;width:100%;text-align:left;margin-bottom:8px}
+</style>
+</head>
+<body>
+<header id="bar">
+  <form id="f">
+    <input id="q" type="search" placeholder="Árabe o español" autocomplete="off" autocapitalize="none"
+           autocorrect="off" spellcheck="false" enterkeyhint="search">
+    <button type="button" id="add" aria-label="Añadir">＋</button>
+  </form>
+</header>
+<main id="main"></main>
+<nav>
+  <button data-v="search">🔎<br>Buscar</button>
+  <button data-v="fav">★<br>Favoritos</button>
+  <button data-v="hist">🕘<br>Historial</button>
+  <button data-v="set">⚙︎<br>Ajustes</button>
+</nav>
+
+<script>
+const $ = s => document.querySelector(s);
+const h = (t, a = {}, ...c) => {
+  const e = document.createElement(t);
+  for (const k in a) {
+    if (k === 'class') e.className = a[k];
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), a[k]);
+    else e.setAttribute(k, a[k]);
+  }
+  for (const x of c.flat()) if (x != null && x !== false) e.append(x);
+  return e;
+};
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + Math.random().toString(36).slice(2));
+const isAr = s => /[\u0600-\u06FF]/.test(s);
+
+// Normaliza árabe (sin vocales cortas, variantes de alif, etc.) y español (sin acentos)
+const norm = s => (s || '').normalize('NFD')
+  .replace(/[\u0300-\u036f\u064B-\u0655\u0670\u0640]/g, '')
+  .replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه')
+  .replace(/ؤ/g, 'و').replace(/ئ/g, 'ي').toLowerCase().trim();
+
+// ---------- Datos ----------
+const KEY = 'dic.v1';
+let S = null;
+try { S = JSON.parse(localStorage.getItem(KEY)); } catch {}
+if (!S) {
+  S = { url: '', history: [], entries: [
+    { id: uid(), ar: 'كِتَاب', tr: 'kitāb', es: 'libro', note: 'Ejemplo: bórralo cuando quieras', fav: false },
+    { id: uid(), ar: 'بَيْت', tr: 'bayt', es: 'casa', note: '', fav: false },
+    { id: uid(), ar: 'مَاء', tr: 'māʼ', es: 'agua', note: '', fav: false },
+    { id: uid(), ar: 'مَدْرَسَة', tr: 'madrasa', es: 'escuela', note: '', fav: false },
+    { id: uid(), ar: 'شُكْرًا', tr: 'šukran', es: 'gracias', note: '', fav: false }
+  ]};
+  save();
+}
+function save() {
+  localStorage.setItem(KEY, JSON.stringify(S, (k, v) => (k[0] === '_' ? undefined : v)));
+}
+navigator.storage?.persist?.();
+
+// ---------- Búsqueda ----------
+const cache = e => e._c || (e._c = [norm(e.ar), norm(e.es), norm(e.tr), norm(e.note)]);
+function score(e, q) {
+  const c = cache(e); let b = 9;
+  for (let i = 0; i < 3; i++) {
+    const f = c[i]; if (!f) continue;
+    const s = f === q ? 0 : f.startsWith(q) ? 1 : (' ' + f).includes(' ' + q) ? 2 : f.includes(q) ? 3 : 9;
+    b = Math.min(b, s);
+  }
+  if (b === 9 && c[3].includes(q)) b = 4;
+  return b;
+}
+
+// ---------- Interfaz ----------
+let view = 'search';
+function render() {
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
+  $('#bar').hidden = view !== 'search';
+  const m = $('#main'); m.replaceChildren();
+  ({ search: renderSearch, fav: renderFav, hist: renderHist, set: renderSet })[view](m);
+}
+
+function card(e) {
+  return h('div', { class: 'card' },
+    e.ar && h('div', { class: 'ar', dir: 'rtl', lang: 'ar' }, e.ar),
+    e.tr && h('div', { class: 'tr' }, e.tr),
+    e.es && h('div', { class: 'es' }, e.es),
+    e.note && h('div', { class: 'note' }, e.note),
+    h('div', { class: 'act' },
+      h('button', { onclick: () => { e.fav = !e.fav; save(); render(); } }, e.fav ? '★' : '☆'),
+      h('button', { onclick: () => edit(e) }, 'Editar')));
+}
+
+function renderSearch(m) {
+  const raw = $('#q').value.trim(), q = norm(raw);
+  let list;
+  if (!q) {
+    list = [...S.entries].reverse().slice(0, 20);
+    m.append(h('p', { class: 'hint' }, `${S.entries.length} entradas · últimas añadidas`));
+  } else {
+    list = S.entries.map(e => [score(e, q), e]).filter(x => x[0] < 9)
+      .sort((a, b) => a[0] - b[0]).slice(0, 100).map(x => x[1]);
+    m.append(h('p', { class: 'hint' }, `${list.length} resultado(s)`));
+  }
+  list.forEach(e => m.append(card(e)));
+  if (raw && /^https?:\/\//.test(S.url))
+    m.append(h('a', { class: 'ext', target: '_blank', rel: 'noopener',
+      href: S.url.replace('{q}', encodeURIComponent(raw)) }, `Buscar «${raw}» en Al-Qatra ↗`));
+  if (raw && !list.length)
+    m.append(h('button', { class: 'primary', onclick: () => edit(isAr(raw) ? { ar: raw } : { es: raw }) }, 'Añadir esta palabra'));
+}
+
+function renderFav(m) {
+  const l = S.entries.filter(e => e.fav);
+  if (!l.length) m.append(h('p', { class: 'hint' }, 'Aún no tienes favoritos. Pulsa ☆ en una entrada.'));
+  l.forEach(e => m.append(card(e)));
+}
+
+function addHist(t) {
+  t = t.trim(); if (!t) return;
+  S.history = [t, ...S.history.filter(x => x !== t)].slice(0, 50); save();
+}
+function renderHist(m) {
+  if (!S.history.length) m.append(h('p', { class: 'hint' }, 'Sin búsquedas todavía.'));
+  S.history.forEach(t => m.append(h('button', { class: 'hist',
+    onclick: () => { $('#q').value = t; view = 'search'; render(); } }, t)));
+  if (S.history.length) m.append(h('button', { class: 'del', onclick: () => { S.history = []; save(); render(); } }, 'Borrar historial'));
+}
+
+function edit(e) {
+  const isNew = !e.id;
+  const f = {
+    ar: h('input', { dir: 'rtl', lang: 'ar', placeholder: 'عربي', autocomplete: 'off' }),
+    tr: h('input', { placeholder: 'Transcripción (opcional)', autocomplete: 'off' }),
+    es: h('input', { placeholder: 'Español', autocomplete: 'off' }),
+    note: h('textarea', { placeholder: 'Notas (opcional)', rows: '3' })
+  };
+  for (const k in f) f[k].value = e[k] || '';
+  const close = () => ov.remove();
+  const ov = h('div', { class: 'ov' },
+    h('form', { class: 'sheet', onsubmit: ev => {
+      ev.preventDefault();
+      const o = isNew ? { id: uid(), fav: false } : e;
+      for (const k in f) o[k] = f[k].value.trim();
+      if (!o.ar && !o.es) return;
+      delete o._c;
+      if (isNew) S.entries.push(o);
+      save(); close(); render();
+    } },
+      h('h2', {}, isNew ? 'Nueva entrada' : 'Editar entrada'),
+      f.ar, f.tr, f.es, f.note,
+      h('div', { class: 'row' },
+        h('button', { type: 'button', onclick: close }, 'Cancelar'),
+        !isNew && h('button', { type: 'button', class: 'del', onclick: () => {
+          if (confirm('¿Borrar esta entrada?')) { S.entries = S.entries.filter(x => x !== e); save(); close(); render(); }
+        } }, 'Borrar'),
+        h('button', { class: 'primary' }, 'Guardar'))));
+  document.body.append(ov);
+}
+
+// ---------- Ajustes, importar y exportar ----------
+function csv(t) {
+  const rows = []; let r = [], c = '', q = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (q) { if (ch === '"') { if (t[i + 1] === '"') { c += '"'; i++; } else q = false; } else c += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ',' || ch === ';' || ch === '\t') { r.push(c); c = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && t[i + 1] === '\n') i++; r.push(c); c = ''; rows.push(r); r = []; }
+    else c += ch;
+  }
+  if (c || r.length) { r.push(c); rows.push(r); }
+  return rows.filter(r => r.some(x => x.trim()));
+}
+
+function doImport(t) {
+  t = t.trim(); let items = [];
+  try { const j = JSON.parse(t); items = Array.isArray(j) ? j : (j && j.entries) || []; }
+  catch {
+    items = csv(t).map(r => ({ ar: r[0], es: r[1], tr: r[2], note: r[3] }));
+    if (items[0] && /^(ar|árabe|arabe)$/i.test((items[0].ar || '').trim())) items.shift();
+  }
+  const seen = new Set(S.entries.map(e => norm(e.ar) + '|' + norm(e.es))); let n = 0;
+  for (const i of items) {
+    const o = { id: uid(), ar: String(i.ar || '').trim(), es: String(i.es || '').trim(),
+      tr: String(i.tr || '').trim(), note: String(i.note || '').trim(), fav: !!i.fav };
+    if (!o.ar && !o.es) continue;
+    const k = norm(o.ar) + '|' + norm(o.es);
+    if (seen.has(k)) continue;
+    seen.add(k); S.entries.push(o); n++;
+  }
+  save(); alert(n + ' entradas importadas'); render();
+}
+
+function renderSet(m) {
+  const url = h('input', { placeholder: 'https://…?palabra={q}', autocapitalize: 'none', autocorrect: 'off',
+    onchange: ev => { S.url = ev.target.value.trim(); save(); } });
+  url.value = S.url || '';
+  const ta = h('textarea', { rows: '8', placeholder: 'Aquí aparece la copia de seguridad, o pega aquí JSON/CSV para importar' });
+  const file = h('input', { type: 'file', accept: '.csv,.json,.txt', onchange: ev => {
+    const f = ev.target.files[0]; if (!f) return;
+    const r = new FileReader(); r.onload = () => doImport(String(r.result)); r.readAsText(f);
+  } });
+  m.append(
+    h('h3', {}, 'Enlace de búsqueda en Al-Qatra'),
+    h('p', { class: 'hint' }, 'Pega la dirección de una búsqueda de la web y cambia la palabra por {q}. Si lo dejas vacío, el botón no aparece.'),
+    url,
+    h('h3', {}, 'Copia de seguridad'),
+    h('p', { class: 'hint' }, 'Tus datos solo viven en este iPhone. Si borras el icono de la pantalla de inicio, se pierden: exporta de vez en cuando y guarda el texto en Notas.'),
+    ta,
+    h('div', { class: 'row', style: 'margin-top:8px' },
+      h('button', { onclick: () => {
+        ta.value = JSON.stringify(S.entries.map(({ ar, tr, es, note, fav }) => ({ ar, tr, es, note, fav })), null, 1);
+        navigator.clipboard?.writeText(ta.value).then(() => alert('Copiado al portapapeles')).catch(() => ta.select());
+      } }, 'Exportar'),
+      h('button', { class: 'primary', onclick: () => ta.value.trim() ? doImport(ta.value) : alert('Pega primero el texto') }, 'Importar')),
+    h('h3', {}, 'Importar desde archivo'),
+    h('p', { class: 'hint' }, 'CSV con columnas: árabe, español, transcripción, nota (la primera fila puede ser cabecera). También vale el JSON exportado.'),
+    file);
+}
+
+// ---------- Arranque ----------
+$('#f').addEventListener('submit', ev => { ev.preventDefault(); addHist($('#q').value); $('#q').blur(); });
+$('#q').addEventListener('input', render);
+$('#q').addEventListener('change', () => addHist($('#q').value));
+$('#add').addEventListener('click', () => { const r = $('#q').value.trim(); edit(r ? (isAr(r) ? { ar: r } : { es: r }) : {}); });
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => { view = b.dataset.v; render(); scrollTo(0, 0); }));
+
+// Icono generado al vuelo para la pantalla de inicio
+(() => {
+  const c = document.createElement('canvas'); c.width = c.height = 180;
+  const x = c.getContext('2d');
+  x.fillStyle = '#0f766e'; x.fillRect(0, 0, 180, 180);
+  x.fillStyle = '#fff'; x.font = 'bold 110px -apple-system,sans-serif';
+  x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText('ق', 90, 95);
+  document.head.append(h('link', { rel: 'apple-touch-icon', href: c.toDataURL('image/png') }));
+})();
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+render();
+</script>
+</body>
+</html>
