@@ -1,0 +1,2 @@
+# diccionario
+diccionario vinculado arabe
